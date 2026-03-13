@@ -118,6 +118,6 @@ fig6 = px.scatter(
     opacity=0.6,
     title="Relation entre glycémie et IMC (échantillon de 1000 patients)",
     labels={"avg_glucose_level": "Glycémie moyenne (mg/dL)", "bmi": "IMC (kg/m²)", "stroke_label": "Statut AVC"},
-    trendline="ols",
+
 )
 st.plotly_chart(fig6, use_container_width=True)

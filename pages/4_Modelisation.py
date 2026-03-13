@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
-import plotly.graph_objects as go
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import train_test_split
@@ -11,6 +10,7 @@ from sklearn.metrics import (
     accuracy_score, precision_score, recall_score, f1_score,
     confusion_matrix, classification_report,
 )
+from imblearn.over_sampling import SMOTE
 import sys
 import os
 
@@ -26,7 +26,6 @@ def load_and_prepare():
     df = df[df["gender"] != "Other"].copy()
     df = df.drop(columns=["id"])
 
-    # Encodage des variables catégorielles
     cat_cols = ["gender", "ever_married", "work_type", "Residence_type", "smoking_status"]
     encoders = {}
     for col in cat_cols:
@@ -45,7 +44,6 @@ def load_and_prepare():
         X, y, test_size=0.2, random_state=42, stratify=y
     )
 
-    # Garder les colonnes sensibles pour le test
     test_idx = X_test.index
     gender_test = df.loc[test_idx, "gender"].values
     residence_test = df.loc[test_idx, "Residence_type"].values
@@ -54,11 +52,16 @@ def load_and_prepare():
 
 
 @st.cache_resource
-def train_model(model_name, X_train, y_train):
+def train_model(model_name, use_smote, X_train, y_train):
+    if use_smote:
+        sm = SMOTE(random_state=42)
+        X_train, y_train = sm.fit_resample(X_train, y_train)
+
     if model_name == "Random Forest":
-        model = RandomForestClassifier(n_estimators=100, random_state=42, class_weight="balanced")
+        model = RandomForestClassifier(n_estimators=100, random_state=42)
     else:
-        model = LogisticRegression(max_iter=1000, random_state=42, class_weight="balanced")
+        model = LogisticRegression(max_iter=1000, random_state=42)
+
     model.fit(X_train, y_train)
     return model
 
@@ -71,28 +74,78 @@ X_train, X_test, y_train, y_test, gender_test, residence_test, feature_cols = lo
 
 st.sidebar.header("Paramètres du modèle")
 model_name = st.sidebar.selectbox("Algorithme", ["Random Forest", "Logistic Regression"])
+use_smote = st.sidebar.toggle("Appliquer SMOTE", value=True)
 
-model = train_model(model_name, X_train, y_train)
+if use_smote:
+    st.sidebar.success("SMOTE activé : les cas d'AVC sont suréchantillonnés pour rééquilibrer les classes.")
+else:
+    st.sidebar.warning("SMOTE désactivé : le modèle risque d'ignorer les cas d'AVC (classe minoritaire).")
+
+model = train_model(model_name, use_smote, X_train, y_train)
 y_pred = model.predict(X_test)
-y_proba = model.predict_proba(X_test)[:, 1] if hasattr(model, "predict_proba") else y_pred
+
+# ── Explication SMOTE ─────────────────────────────────────────────────────────
+with st.expander("Pourquoi SMOTE ?", expanded=False):
+    st.markdown("""
+    Le dataset est **très déséquilibré** : ~95% de patients sans AVC, ~5% avec AVC.
+    Sans correction, le modèle apprend à toujours prédire "Pas d'AVC" et obtient 95% d'accuracy
+    tout en ne détectant **aucun AVC réel** (Recall = 0).
+
+    **SMOTE** (Synthetic Minority Over-sampling Technique) génère des exemples synthétiques
+    de la classe minoritaire (AVC) dans l'espace des features, jusqu'à équilibrer les deux classes.
+    Cela force le modèle à apprendre les patterns des cas d'AVC.
+    """)
+    col_a, col_b = st.columns(2)
+    sm_temp = SMOTE(random_state=42)
+    X_res, y_res = sm_temp.fit_resample(X_train, y_train)
+    col_a.metric("Avant SMOTE — cas AVC (train)", int(y_train.sum()))
+    col_b.metric("Après SMOTE — cas AVC (train)", int(y_res.sum()))
+
+st.markdown("---")
 
 # ── Performances globales ─────────────────────────────────────────────────────
 st.header("1. Performances Globales")
 
-acc = accuracy_score(y_test, y_pred)
-prec = precision_score(y_test, y_pred, zero_division=0)
-rec = recall_score(y_test, y_pred, zero_division=0)
-f1 = f1_score(y_test, y_pred, zero_division=0)
+acc   = accuracy_score(y_test, y_pred)
+prec  = precision_score(y_test, y_pred, zero_division=0)
+rec   = recall_score(y_test, y_pred, zero_division=0)
+f1    = f1_score(y_test, y_pred, zero_division=0)
 
 col1, col2, col3, col4 = st.columns(4)
-col1.metric("Accuracy", f"{acc:.3f}")
+col1.metric("Accuracy",  f"{acc:.3f}")
 col2.metric("Precision", f"{prec:.3f}")
-col3.metric("Recall", f"{rec:.3f}")
-col4.metric("F1-Score", f"{f1:.3f}")
+col3.metric("Recall",    f"{rec:.3f}", help="Proportion d'AVC réels correctement détectés")
+col4.metric("F1-Score",  f"{f1:.3f}")
+
+# Matrice de confusion globale
+st.subheader("Matrice de Confusion Globale")
+cm = confusion_matrix(y_test, y_pred)
+tn, fp, fn, tp = cm.ravel()
+
+labels = ["Pas d'AVC", "AVC"]
+fig_cm = px.imshow(
+    cm, text_auto=True,
+    x=labels, y=labels,
+    color_continuous_scale="Blues",
+    title="Matrice de confusion — toutes classes",
+    labels={"x": "Prédit", "y": "Réel"},
+)
+st.plotly_chart(fig_cm, use_container_width=True)
+
+col_tn, col_fp, col_fn, col_tp = st.columns(4)
+col_tn.metric("Vrais Négatifs (TN)", tn,  help="Pas AVC prédit correctement")
+col_fp.metric("Faux Positifs  (FP)", fp,  help="Pas AVC prédit comme AVC")
+col_fn.metric("Faux Négatifs  (FN)", fn,  help="AVC manqué — dangereux !")
+col_tp.metric("Vrais Positifs (TP)", tp,  help="AVC détecté correctement")
+
+if fn > 0:
+    st.error(f"**{fn} AVC non détectés (Faux Négatifs)** — ces patients n'auraient reçu aucune alerte.")
+if tp > 0:
+    st.success(f"**{tp} AVC correctement détectés (Vrais Positifs)** sur {fn+tp} cas réels.")
 
 st.markdown("---")
 
-# ── Importance des features (RF uniquement) ───────────────────────────────────
+# ── Importance des features ───────────────────────────────────────────────────
 if model_name == "Random Forest":
     st.header("2. Importance des Variables")
     importances = pd.DataFrame({
@@ -111,7 +164,6 @@ if model_name == "Random Forest":
 # ── Métriques de fairness sur les prédictions ─────────────────────────────────
 st.header("3. Métriques de Fairness sur les Prédictions")
 
-# Genre
 res_dpd_gender = demographic_parity_difference(
     y_true=y_test.values, y_pred=y_pred, sensitive_attribute=gender_test
 )
@@ -119,7 +171,6 @@ res_dir_gender = disparate_impact_ratio(
     y_true=y_test.values, y_pred=y_pred, sensitive_attribute=gender_test,
     unprivileged_value="Female", privileged_value="Male",
 )
-# Zone
 res_dpd_geo = demographic_parity_difference(
     y_true=y_test.values, y_pred=y_pred, sensitive_attribute=residence_test
 )
@@ -129,24 +180,21 @@ res_dir_geo = disparate_impact_ratio(
 )
 
 col_f1, col_f2, col_f3, col_f4 = st.columns(4)
-col_f1.metric("Parité Démographique (Genre)", f"{res_dpd_gender['difference']:.4f}")
-col_f2.metric("Ratio DI Genre (F/M)", f"{res_dir_gender['ratio']:.4f}")
-col_f3.metric("Parité Démographique (Zone)", f"{res_dpd_geo['difference']:.4f}")
-col_f4.metric("Ratio DI Zone (Rural/Urban)", f"{res_dir_geo['ratio']:.4f}")
-
-# Graphique comparatif prédictions par groupe
-st.subheader("Taux de prédiction d'AVC par groupe")
+col_f1.metric("Parite Demo. Genre",    f"{res_dpd_gender['difference']:.4f}")
+col_f2.metric("Ratio DI Genre (F/M)",  f"{res_dir_gender['ratio']:.4f}")
+col_f3.metric("Parite Demo. Zone",     f"{res_dpd_geo['difference']:.4f}")
+col_f4.metric("Ratio DI Zone (R/U)",   f"{res_dir_geo['ratio']:.4f}")
 
 fairness_data = []
 for g, r in res_dpd_gender["rates"].items():
-    fairness_data.append({"Groupe": g, "Type": "Genre", "Taux prédit (%)" : r * 100})
+    fairness_data.append({"Groupe": g, "Type": "Genre", "Taux predit (%)": r * 100})
 for g, r in res_dpd_geo["rates"].items():
-    fairness_data.append({"Groupe": g, "Type": "Zone", "Taux prédit (%)": r * 100})
+    fairness_data.append({"Groupe": g, "Type": "Zone", "Taux predit (%)": r * 100})
 
 fig_fair = px.bar(
     pd.DataFrame(fairness_data),
-    x="Groupe", y="Taux prédit (%)", color="Type", barmode="group",
-    title="Taux de prédiction d'AVC positif par groupe sensible",
+    x="Groupe", y="Taux predit (%)", color="Type", barmode="group",
+    title="Taux de prediction d'AVC positif par groupe sensible",
     text_auto=".2f",
 )
 st.plotly_chart(fig_fair, use_container_width=True)
@@ -156,7 +204,6 @@ st.markdown("---")
 # ── Performances par groupe sensible ─────────────────────────────────────────
 st.header("4. Performances par Groupe Sensible")
 
-tab1, tab2 = st.tabs(["Par Genre", "Par Zone de Résidence"])
 
 def group_metrics(y_true, y_pred, groups):
     rows = []
@@ -166,53 +213,54 @@ def group_metrics(y_true, y_pred, groups):
         rows.append({
             "Groupe": g,
             "N": int(mask.sum()),
-            "Accuracy": round(accuracy_score(yt, yp), 3),
+            "Accuracy":  round(accuracy_score(yt, yp), 3),
             "Precision": round(precision_score(yt, yp, zero_division=0), 3),
-            "Recall": round(recall_score(yt, yp, zero_division=0), 3),
-            "F1": round(f1_score(yt, yp, zero_division=0), 3),
+            "Recall":    round(recall_score(yt, yp, zero_division=0), 3),
+            "F1":        round(f1_score(yt, yp, zero_division=0), 3),
         })
     return pd.DataFrame(rows)
 
-with tab1:
-    df_gender_perf = group_metrics(y_test.values, y_pred, gender_test)
-    st.dataframe(df_gender_perf, use_container_width=True)
 
-    fig_g_perf = px.bar(
-        df_gender_perf.melt(id_vars="Groupe", value_vars=["Accuracy", "Precision", "Recall", "F1"]),
+tab1, tab2 = st.tabs(["Par Genre", "Par Zone de Résidence"])
+
+with tab1:
+    df_gp = group_metrics(y_test.values, y_pred, gender_test)
+    st.dataframe(df_gp, use_container_width=True)
+    fig_gp = px.bar(
+        df_gp.melt(id_vars="Groupe", value_vars=["Accuracy", "Precision", "Recall", "F1"]),
         x="variable", y="value", color="Groupe", barmode="group",
-        title="Métriques de performance par genre",
-        labels={"variable": "Métrique", "value": "Score"},
+        title="Metriques de performance par genre",
+        labels={"variable": "Metrique", "value": "Score"},
     )
-    st.plotly_chart(fig_g_perf, use_container_width=True)
+    st.plotly_chart(fig_gp, use_container_width=True)
 
 with tab2:
-    df_geo_perf = group_metrics(y_test.values, y_pred, residence_test)
-    st.dataframe(df_geo_perf, use_container_width=True)
-
-    fig_geo_perf = px.bar(
-        df_geo_perf.melt(id_vars="Groupe", value_vars=["Accuracy", "Precision", "Recall", "F1"]),
+    df_rp = group_metrics(y_test.values, y_pred, residence_test)
+    st.dataframe(df_rp, use_container_width=True)
+    fig_rp = px.bar(
+        df_rp.melt(id_vars="Groupe", value_vars=["Accuracy", "Precision", "Recall", "F1"]),
         x="variable", y="value", color="Groupe", barmode="group",
-        title="Métriques de performance par zone de résidence",
-        labels={"variable": "Métrique", "value": "Score"},
+        title="Metriques de performance par zone de residence",
+        labels={"variable": "Metrique", "value": "Score"},
     )
-    st.plotly_chart(fig_geo_perf, use_container_width=True)
+    st.plotly_chart(fig_rp, use_container_width=True)
 
 st.markdown("---")
 
 # ── Confusion matrices par groupe ─────────────────────────────────────────────
 st.header("5. Matrices de Confusion par Groupe")
 
+
 def plot_confusion(y_true, y_pred, group_name):
     cm = confusion_matrix(y_true, y_pred)
     labels = ["Pas d'AVC", "AVC"]
-    fig = px.imshow(
-        cm, text_auto=True,
-        x=labels, y=labels,
+    return px.imshow(
+        cm, text_auto=True, x=labels, y=labels,
         color_continuous_scale="Blues",
         title=f"Matrice de confusion — {group_name}",
-        labels={"x": "Prédit", "y": "Réel"},
+        labels={"x": "Predit", "y": "Reel"},
     )
-    return fig
+
 
 tab3, tab4 = st.tabs(["Par Genre", "Par Zone de Résidence"])
 
