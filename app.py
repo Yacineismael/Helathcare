@@ -21,7 +21,7 @@ df = load_data()
 st.title("🧠 Stroke Prediction — Détection de Biais")
 st.markdown("---")
 
-st.header("Contexte et Problématique")
+st.header("Contexte")
 st.markdown(
     """
 L'accident vasculaire cérébral (AVC) est l'une des principales causes de décès et de handicap dans le monde.
@@ -35,15 +35,6 @@ liés au **genre** et à la **zone géographique (Rural/Urban)**, qui pourraient
 dans le diagnostic ou le traitement médical.
 """
 )
-
-st.markdown("---")
-
-st.header("Métriques Clés")
-col1, col2, col3, col4 = st.columns(4)
-col1.metric("Nombre de patients", f"{len(df):,}")
-col2.metric("Nombre de variables", df.shape[1])
-col3.metric("Taux de valeurs manquantes", f"{(df.isnull().sum().sum() / df.size * 100):.2f}%")
-col4.metric("Taux d'AVC (variable cible)", f"{df['stroke'].mean() * 100:.1f}%")
 
 st.markdown("---")
 
