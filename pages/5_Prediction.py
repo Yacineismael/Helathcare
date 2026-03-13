@@ -1,10 +1,9 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
-from imblearn.over_sampling import SMOTE
+from imblearn.ensemble import BalancedRandomForestClassifier
 
 st.set_page_config(page_title="Prédiction Personnalisée", page_icon="🩺", layout="wide")
 
@@ -28,9 +27,8 @@ def get_model():
     X, y = df[feature_cols], df["stroke"]
     X_train, _, y_train, _ = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
 
-    X_res, y_res = SMOTE(random_state=42).fit_resample(X_train, y_train)
-    model = RandomForestClassifier(n_estimators=100, random_state=42)
-    model.fit(X_res, y_res)
+    model = BalancedRandomForestClassifier(n_estimators=100, random_state=42)
+    model.fit(X_train, y_train)
 
     return model, encoders, feature_cols
 

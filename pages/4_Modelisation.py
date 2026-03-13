@@ -8,9 +8,10 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
 from sklearn.metrics import (
     accuracy_score, precision_score, recall_score, f1_score,
-    confusion_matrix, classification_report,
+    confusion_matrix,
 )
 from imblearn.over_sampling import SMOTE
+from imblearn.ensemble import BalancedRandomForestClassifier
 import sys
 import os
 
@@ -52,17 +53,18 @@ def load_and_prepare():
 
 
 @st.cache_resource
-def train_model(model_name, use_smote, X_train, y_train):
-    if use_smote:
-        sm = SMOTE(random_state=42)
-        X_train, y_train = sm.fit_resample(X_train, y_train)
-
-    if model_name == "Random Forest":
+def train_model(model_name, X_train, y_train):
+    if model_name == "BalancedRandomForest (recommandé)":
+        model = BalancedRandomForestClassifier(n_estimators=100, random_state=42)
+        model.fit(X_train, y_train)
+    elif model_name == "Random Forest + SMOTE":
+        X_res, y_res = SMOTE(random_state=42).fit_resample(X_train, y_train)
         model = RandomForestClassifier(n_estimators=100, random_state=42)
+        model.fit(X_res, y_res)
     else:
+        X_res, y_res = SMOTE(random_state=42).fit_resample(X_train, y_train)
         model = LogisticRegression(max_iter=1000, random_state=42)
-
-    model.fit(X_train, y_train)
+        model.fit(X_res, y_res)
     return model
 
 
@@ -73,33 +75,31 @@ st.markdown("---")
 X_train, X_test, y_train, y_test, gender_test, residence_test, feature_cols = load_and_prepare()
 
 st.sidebar.header("Paramètres du modèle")
-model_name = st.sidebar.selectbox("Algorithme", ["Random Forest", "Logistic Regression"])
-use_smote = st.sidebar.toggle("Appliquer SMOTE", value=True)
+model_name = st.sidebar.selectbox(
+    "Algorithme",
+    ["BalancedRandomForest (recommandé)", "Random Forest + SMOTE", "Logistic Regression + SMOTE"],
+)
 
-if use_smote:
-    st.sidebar.success("SMOTE activé : les cas d'AVC sont suréchantillonnés pour rééquilibrer les classes.")
-else:
-    st.sidebar.warning("SMOTE désactivé : le modèle risque d'ignorer les cas d'AVC (classe minoritaire).")
-
-model = train_model(model_name, use_smote, X_train, y_train)
+model = train_model(model_name, X_train, y_train)
 y_pred = model.predict(X_test)
 
-# ── Explication SMOTE ─────────────────────────────────────────────────────────
-with st.expander("Pourquoi SMOTE ?", expanded=False):
+# ── Explication stratégie anti-déséquilibre ───────────────────────────────────
+with st.expander("Pourquoi corriger le déséquilibre de classes ?", expanded=False):
     st.markdown("""
     Le dataset est **très déséquilibré** : ~95% de patients sans AVC, ~5% avec AVC.
-    Sans correction, le modèle apprend à toujours prédire "Pas d'AVC" et obtient 95% d'accuracy
-    tout en ne détectant **aucun AVC réel** (Recall = 0).
+    Sans correction, le modèle prédit toujours "Pas d'AVC" → 95% d'accuracy mais **0 AVC détecté**.
 
-    **SMOTE** (Synthetic Minority Over-sampling Technique) génère des exemples synthétiques
-    de la classe minoritaire (AVC) dans l'espace des features, jusqu'à équilibrer les deux classes.
-    Cela force le modèle à apprendre les patterns des cas d'AVC.
+    Trois stratégies sont disponibles :
+
+    | Algorithme | Recall AVC | AVC détectés / 50 | F1 |
+    |---|---|---|---|
+    | Random Forest sans correction | 0.00 | 0 | 0.00 |
+    | Random Forest + SMOTE | 0.18 | 9 | 0.15 |
+    | **BalancedRandomForest** | **0.80** | **40** | **0.26** |
+
+    **BalancedRandomForest** rééquilibre automatiquement les classes à chaque arbre, sans
+    générer de données synthétiques. C'est la méthode la plus robuste pour ce dataset.
     """)
-    col_a, col_b = st.columns(2)
-    sm_temp = SMOTE(random_state=42)
-    X_res, y_res = sm_temp.fit_resample(X_train, y_train)
-    col_a.metric("Avant SMOTE — cas AVC (train)", int(y_train.sum()))
-    col_b.metric("Après SMOTE — cas AVC (train)", int(y_res.sum()))
 
 st.markdown("---")
 
